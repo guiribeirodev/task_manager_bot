@@ -25,19 +25,7 @@ dp = Dispatcher()
 TODO_STATES = {"draft", "todo", "doing", "done", "trash"}
 
 
-# @dp.message()
-# async def echo_handler2(message: Message) -> None:
-#     payload = {
-#         "user_id": message.from_user.id,
-#         "text": message.text,
-#     }
 
-#     async with httpx.AsyncClient(timeout=10.0) as client:
-#         response = await client.post(f"{API_URL}/messages", json=payload)
-#         response.raise_for_status()
-#         data = response.json()
-
-#     await message.answer(data["reply"])
 
 @dp.message(Command("list"))
 @dp.message(Command("todos"))
@@ -230,19 +218,41 @@ async def command_delete_todo_handler(message: Message) -> None:
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
     """
-    This handler receives messages with `/start` command
+    This handler receives messages with `/start` command and registers the user in the API.
     """
     user = message.from_user
     if user is None:
         await message.answer("Hello!")
         return
 
-    # Most event objects have aliases for API methods that can be called in events' context
-    # For example if you want to answer to incoming message you can use `message.answer(...)` alias
-    # and the target chat will be passed to :ref:`aiogram.methods.send_message.SendMessage`
-    # method automatically or call API method directly via
-    # Bot instance: `bot.send_message(chat_id=message.chat.id, ...)`
-    await message.answer(f"Hello, {html.bold(user.full_name)}!")
+    username_val = user.full_name or user.username or f"User_{user.id}"
+    email_handle = (user.username or user.first_name or f"user_{user.id}").lower().replace(" ", "_")
+    email_val = f"{email_handle}@teste.com"
+
+    payload = {
+        "id": user.id,
+        "username": username_val,
+        "email": email_val,
+        "password": "teste@12345",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(f"{API_URL}/users/", json=payload)
+            response.raise_for_status()
+            data = response.json()
+            await message.answer(
+                f"Olá, {html.bold(user.full_name)}! Seu usuário foi criado com sucesso.\n"
+                f"ID: {data.get('id')}\n"
+                f"Username: {data.get('username')}\n"
+                f"Email: {data.get('email')}"
+            )
+    except httpx.HTTPStatusError:
+        # Se o usuário já existir ou retornar erro de status, saudamos o usuário
+        await message.answer(f"Olá, {html.bold(user.full_name)}! Bem-vindo(a) de volta!")
+    except Exception as e:
+        logging.error(f"Erro ao criar usuário na API: {e}")
+        await message.answer(f"Olá, {html.bold(user.full_name)}!")
 
 
 @dp.message(Command('help'))
@@ -270,16 +280,29 @@ async def command_help_handler(message: Message) -> None:
 @dp.message()
 async def echo_handler(message: Message) -> None:
     """
-    Handler will forward receive a message back to the sender
-
-    By default, message handler will handle all message types (like a text, photo, sticker etc.)
+    Captura o ID do usuário (message.from_user.id) e o texto da mensagem,
+    enviando os dados para a API (POST /messages).
     """
+    if not message.from_user:
+        await message.answer("Não foi possível obter os dados do usuário.")
+        return
+
+    payload = {
+        "user_id": message.from_user.id,
+        "text": message.text or "",
+    }
+
     try:
-        # Send a copy of the received message
-        await message.send_copy(chat_id=message.chat.id)
-    except TypeError:
-        # But not all the types is supported to be copied so need to handle it
-        await message.answer("Nice try!")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(f"{API_URL}/messages", json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        reply = data.get("reply", "Mensagem processada pela API.")
+        await message.answer(reply)
+    except Exception as e:
+        logging.error(f"Erro ao comunicar com a API: {e}")
+        await message.answer("Ocorreu um erro ao comunicar com a API.")
 
 
 async def main() -> None:
