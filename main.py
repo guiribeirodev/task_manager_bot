@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 # Bot token can be obtained via https://t.me/BotFather
 load_dotenv()
 TOKEN = getenv("BOT_TOKEN")
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+API_URL = getenv("API_URL", "http://localhost:8000")
+BOT_API_KEY = getenv("BOT_API_KEY")
 
 
 # All handlers should be attached to the Router (or Dispatcher)
@@ -25,31 +26,31 @@ dp = Dispatcher()
 TODO_STATES = {"draft", "todo", "doing", "done", "trash"}
 
 
-
-
 @dp.message(Command("list"))
 @dp.message(Command("todos"))
 async def command_list_todos_handler(message: Message) -> None:
     """List todos using /list or /todos."""
-    offset = 0
-    limit = 100
+    if not message.from_user:
+        await message.answer("Não foi possível obter o ID do usuário.")
+        return
 
-    if message.text:
-        parts = message.text.split(maxsplit=2)
-        if len(parts) >= 2 and parts[1].isdigit():
-            offset = int(parts[1])
-        if len(parts) == 3 and parts[2].isdigit():
-            limit = int(parts[2])
+    telegram_id = message.from_user.id
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(
-            f"{API_URL}/todos/",
-            params={"offset": offset, "limit": limit},
-        )
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{API_URL}/todos/",
+                params={"telegram_id": telegram_id},
+                headers={"X-Bot-Api-Key": BOT_API_KEY},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        logging.error(f"Erro ao buscar tarefas: {e}")
+        await message.answer("Ocorreu um erro ao buscar a lista de tarefas.")
+        return
 
-    todos = data.get("todos", [])
+    todos = data if isinstance(data, list) else data.get("todos", [])
     if not todos:
         await message.answer("Nenhum TODO encontrado.")
         return
@@ -62,20 +63,40 @@ async def command_list_todos_handler(message: Message) -> None:
 
     await message.answer("TODOS:\n" + "\n".join(todo_list))
 
+
 @dp.message(Command('users'))
 async def command_list_users_handler(message: Message) -> None:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(f"{API_URL}/users/?offset=0&limit=100")
-        response.raise_for_status()
-        data = response.json()
+    if not message.from_user:
+        await message.answer("Não foi possível obter o ID do usuário.")
+        return
 
-    await message.answer(f'{data}')
+    telegram_id = message.from_user.id
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{API_URL}/users/",
+                params={"offset": 0, "limit": 100, "telegram_id": telegram_id},
+                headers={"X-Bot-Api-Key": BOT_API_KEY},
+            )
+            response.raise_for_status()
+            data = response.json()
+        await message.answer(f'{data}')
+    except Exception as e:
+        logging.error(f"Erro ao listar usuários: {e}")
+        await message.answer("Ocorreu um erro ao listar os usuários.")
 
 
 @dp.message(Command("todo"))
 @dp.message(Command("addtodo"))
 async def command_add_todo_handler(message: Message) -> None:
     """Create a new todo using /todo or /addtodo."""
+    if not message.from_user:
+        await message.answer("Não foi possível obter o ID do usuário.")
+        return
+
+    telegram_id = message.from_user.id
+
     if not message.text:
         await message.answer("Use: /todo Titulo | Descricao | state")
         return
@@ -108,25 +129,39 @@ async def command_add_todo_handler(message: Message) -> None:
         "title": title,
         "description": description,
         "state": state,
+        "user_id": telegram_id,
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(f"{API_URL}/todos/", json=payload)
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{API_URL}/todos/",
+                json=payload,
+                headers={"X-Bot-Api-Key": BOT_API_KEY},
+            )
+            response.raise_for_status()
+            data = response.json()
 
-    await message.answer(
-        "TODO criado com sucesso.\n"
-        f"Titulo: {html.bold(data['title'])}\n"
-        f"Descricao: {data['description']}\n"
-        f"State: {data['state']}\n"
-        f"ID: {data['id']}"
-    )
+        await message.answer(
+            "TODO criado com sucesso.\n"
+            f"Titulo: {html.bold(data['title'])}\n"
+            f"Descricao: {data['description']}\n"
+            f"State: {data['state']}\n"
+        )
+    except Exception as e:
+        logging.error(f"Erro ao criar TODO: {e}")
+        await message.answer("Ocorreu um erro ao criar o TODO.")
 
 
 @dp.message(Command("todo_edit"))
 async def command_edit_todo_handler(message: Message) -> None:
     """Update a todo using /todo_edit."""
+    if not message.from_user:
+        await message.answer("Não foi possível obter o ID do usuário.")
+        return
+
+    telegram_id = message.from_user.id
+
     if not message.text:
         await message.answer(
             "Use: /todo_edit <id> | <title|null> | <description|null> | <state|null>"
@@ -152,7 +187,9 @@ async def command_edit_todo_handler(message: Message) -> None:
     todo_id = int(raw_fields[0])
     title_raw, description_raw, state_raw = raw_fields[1:]
 
-    payload: dict[str, object] = {}
+    payload: dict[str, object] = {
+        "telegram_id": telegram_id,
+    }
     if title_raw.lower() != "null":
         payload["title"] = title_raw
     if description_raw.lower() != "null":
@@ -166,33 +203,45 @@ async def command_edit_todo_handler(message: Message) -> None:
             return
         payload["state"] = state
 
-    if not payload:
+    if len(payload) <= 1:
         await message.answer(
             "Envie pelo menos um campo para atualizar.\n"
             "Formato: /todo_edit <id> | <title|null> | <description|null> | <state|null>"
         )
         return
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.patch(
-            f"{API_URL}/todos/{todo_id}",
-            json=payload,
-        )
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.patch(
+                f"{API_URL}/todos/{todo_id}",
+                json=payload,
+                params={"telegram_id": telegram_id},
+                headers={"X-Bot-Api-Key": BOT_API_KEY},
+            )
+            response.raise_for_status()
+            data = response.json()
 
-    await message.answer(
-        "TODO atualizado com sucesso.\n"
-        f"ID: {data['id']}\n"
-        f"Titulo: {html.bold(data['title'])}\n"
-        f"Descricao: {data['description']}\n"
-        f"State: {data['state']}"
-    )
+        await message.answer(
+            "TODO atualizado com sucesso.\n"
+            f"ID: {data['id']}\n"
+            f"Titulo: {html.bold(data['title'])}\n"
+            f"Descricao: {data['description']}\n"
+            f"State: {data['state']}"
+        )
+    except Exception as e:
+        logging.error(f"Erro ao editar TODO: {e}")
+        await message.answer("Ocorreu um erro ao atualizar o TODO.")
 
 
 @dp.message(Command("todo_delete"))
 async def command_delete_todo_handler(message: Message) -> None:
     """Delete a todo using /todo_delete."""
+    if not message.from_user:
+        await message.answer("Não foi possível obter o ID do usuário.")
+        return
+
+    telegram_id = message.from_user.id
+
     if not message.text:
         await message.answer("Use: /todo_delete <id>")
         return
@@ -207,12 +256,20 @@ async def command_delete_todo_handler(message: Message) -> None:
 
     todo_id = int(parts[1].strip())
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.delete(f"{API_URL}/todos/{todo_id}")
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.delete(
+                f"{API_URL}/todos/{todo_id}",
+                params={"telegram_id": telegram_id},
+                headers={"X-Bot-Api-Key": BOT_API_KEY},
+            )
+            response.raise_for_status()
+            data = response.json()
 
-    await message.answer(data.get("message", f"TODO {todo_id} apagado com sucesso."))
+        await message.answer(data.get("message", f"TODO {todo_id} apagado com sucesso."))
+    except Exception as e:
+        logging.error(f"Erro ao apagar TODO: {e}")
+        await message.answer("Ocorreu um erro ao apagar o TODO.")
 
 
 @dp.message(CommandStart())
@@ -225,6 +282,7 @@ async def command_start_handler(message: Message) -> None:
         await message.answer("Hello!")
         return
 
+    telegram_id = user.id
     username_val = user.full_name or user.username or f"User_{user.id}"
     email_handle = (user.username or user.first_name or f"user_{user.id}").lower().replace(" ", "_")
     email_val = f"{email_handle}@teste.com"
@@ -234,11 +292,17 @@ async def command_start_handler(message: Message) -> None:
         "username": username_val,
         "email": email_val,
         "password": "teste@12345",
+        "telegram_id": telegram_id,
     }
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(f"{API_URL}/users/", json=payload)
+            response = await client.post(
+                f"{API_URL}/users/",
+                json=payload,
+                params={"telegram_id": telegram_id},
+                headers={"X-Bot-Api-Key": BOT_API_KEY},
+            )
             response.raise_for_status()
             data = response.json()
             await message.answer(
@@ -277,6 +341,7 @@ async def command_help_handler(message: Message) -> None:
         "States: draft, todo, doing, done, trash"
     )
 
+
 @dp.message()
 async def echo_handler(message: Message) -> None:
     """
@@ -287,14 +352,22 @@ async def echo_handler(message: Message) -> None:
         await message.answer("Não foi possível obter os dados do usuário.")
         return
 
+    telegram_id = message.from_user.id
+
     payload = {
         "user_id": message.from_user.id,
         "text": message.text or "",
+        "telegram_id": telegram_id,
     }
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(f"{API_URL}/messages", json=payload)
+            response = await client.post(
+                f"{API_URL}/messages",
+                json=payload,
+                params={"telegram_id": telegram_id},
+                headers={"X-Bot-Api-Key": BOT_API_KEY},
+            )
             response.raise_for_status()
             data = response.json()
 
